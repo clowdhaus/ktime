@@ -1,3 +1,3 @@
 pub mod cli;
 
-pub use cli::Cli;
+pub use cli::{collect, run, Cli, Commands};
