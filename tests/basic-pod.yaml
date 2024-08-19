@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: basic
+spec:
+  containers:
+    - name: basic
+      image: busybox:latest
+      command: ['sleep']
+      args:
+        ['360']

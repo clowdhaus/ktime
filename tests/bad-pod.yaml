@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bad
+spec:
+  containers:
+    - name: bad
+      image: busybox:latest
+      command: ['python3']
+      args:
+        [
+          '-c',
+          'import torch; print(torch.cuda.is_available()); print(torch.cuda.device_count())',
+        ]
+      resources:
+        limits:
+          example.com/foo: '1' # does not exist
+  tolerations:
+    - key: 'example.com/foo'
+      operator: 'Exists'
+      effect: 'NoSchedule'

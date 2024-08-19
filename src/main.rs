@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use tracing_log::AsTrace;
 use tracing_subscriber::FmtSubscriber;
@@ -18,14 +18,14 @@ async fn main() -> Result<()> {
     Err(_) => {
       bail!(
         "Unable to connect to cluster. Ensure kubeconfig file is present and updated to connect to the cluster.
-      Try: aws eks update-kubeconfig --name {cluster_name}"
+      Try: aws eks update-kubeconfig --name <cluster-name>"
       );
     }
   };
 
   match cli.commands {
-    ktime::Commands::Collect(args, client) => ktime::collect(&args).await?,
-    ktime::Commands::Run(args, client) => ktime::run(&args).await?,
+    ktime::Commands::Collect(args) => ktime::collect(&args, k8s_client).await?,
+    ktime::Commands::Run(args) => ktime::run(&args, k8s_client).await?,
   }
 
   Ok(())
