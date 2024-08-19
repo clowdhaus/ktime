@@ -40,14 +40,14 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
   #[command(arg_required_else_help = true)]
-  Collect(Pod),
+  Collect(Input),
   #[command(arg_required_else_help = true)]
-  Run(Pod),
+  Run(Input),
 }
 
 /// Analyze an Amazon EKS cluster for potential upgrade issues
 #[derive(Args, Debug, Serialize, Deserialize)]
-pub struct Pod {
+pub struct Input {
   /// The name of the Kubernetes pod
   #[clap(short, long)]
   pub name: String,
@@ -61,24 +61,31 @@ pub struct Pod {
   pub path: Option<PathBuf>,
 }
 
-pub async fn collect(pod: &Pod) -> Result<()> {
+
+// async fn doit(input: &Input) -> Result<()> {
+//   let api: Api<apps::v1::Deployment> = Api::all(client.to_owned());
+
+//   Ok(())
+// }
+
+pub async fn collect(input: &Input, _client: kube::Client) -> Result<()> {
   println!(
     "Collecting Kubernetes pod event time durations for the pod `{}` in the namespace `{}`",
-    pod.name, pod.namespace
+    input.name, input.namespace
   );
 
   Ok(())
 }
 
-pub async fn run(pod: &Pod) -> Result<()> {
-  let path = match &pod.path {
+pub async fn run(input: &Input, _client: kube::Client) -> Result<()> {
+  let path = match &input.path {
     Some(p) => p.display().to_string(),
     None => bail!("The path to the manifest file is required"),
   };
 
   println!(
     "Applying the manifest at `{path}` and collecting Kubernetes pod event time durations for the pod `{}` in the namespace `{}`",
-    pod.name, pod.namespace
+    input.name, input.namespace
   );
 
   Ok(())

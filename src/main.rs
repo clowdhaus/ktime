@@ -13,9 +13,19 @@ async fn main() -> Result<()> {
     .finish();
   tracing::subscriber::set_global_default(subscriber).expect("Setting default subscriber failed");
 
+  let k8s_client = match kube::Client::try_default().await {
+    Ok(client) => client,
+    Err(_) => {
+      bail!(
+        "Unable to connect to cluster. Ensure kubeconfig file is present and updated to connect to the cluster.
+      Try: aws eks update-kubeconfig --name {cluster_name}"
+      );
+    }
+  };
+
   match cli.commands {
-    ktime::Commands::Collect(args) => ktime::collect(&args).await?,
-    ktime::Commands::Run(args) => ktime::run(&args).await?,
+    ktime::Commands::Collect(args, client) => ktime::collect(&args).await?,
+    ktime::Commands::Run(args, client) => ktime::run(&args).await?,
   }
 
   Ok(())
