@@ -16,16 +16,13 @@ async fn main() -> Result<()> {
   let k8s_client = match kube::Client::try_default().await {
     Ok(client) => client,
     Err(_) => {
-      bail!(
-        "Unable to connect to cluster. Ensure kubeconfig file is present and updated to connect to the cluster.
-      Try: aws eks update-kubeconfig --name <cluster-name>"
-      );
+      bail!("Unable to connect to cluster. Ensure kubeconfig file is present and updated to connect to the cluster.");
     }
   };
 
   match cli.commands {
+    ktime::Commands::Apply(args) => ktime::apply(&args, k8s_client).await?,
     ktime::Commands::Collect(args) => ktime::collect(&args, k8s_client).await?,
-    ktime::Commands::Run(args) => ktime::run(&args, k8s_client).await?,
   }
 
   Ok(())

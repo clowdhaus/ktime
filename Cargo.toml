@@ -17,6 +17,7 @@ anyhow = "1.0"
 chrono = "0.4"
 clap = { version = "4.2", features = ["derive", "color"] }
 clap-verbosity-flag = "2.0"
+futures = { version = "0.3", features = ["async-await"] }
 k8s-openapi = { version = "0.22", default-features = false, features = ["latest"] }
 kube = { version = "0.93", default-features = false, features = [ "client", "derive", "rustls-tls" ] }
 serde = { version = "1.0", features = ["derive"] }

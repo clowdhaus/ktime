@@ -4,15 +4,11 @@ use anstyle::{AnsiColor, Color, Style};
 use anyhow::{bail, Context, Result};
 use clap::{builder::Styles, Args, Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
+use futures::prelude::*;
 use k8s_openapi::api::core::v1::Pod;
-use kube::{
-  api::{Api, DynamicObject, Patch, PatchParams, ResourceExt},
-  core::GroupVersionKind,
-  discovery::Discovery,
-};
+use kube::api::{Api, PostParams, ResourceExt, WatchEvent, WatchParams};
 use serde::{Deserialize, Serialize};
-use tokio::time::Duration;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Styles for CLI
 fn get_styles() -> Styles {
@@ -49,9 +45,10 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
   #[command(arg_required_else_help = true)]
-  Collect(CollectInput),
+  Apply(ApplyInput),
+
   #[command(arg_required_else_help = true)]
-  Run(RunInput),
+  Collect(CollectInput),
 }
 
 /// Collect the pod event time durations of an existing Kubernetes pod
@@ -66,12 +63,12 @@ pub struct CollectInput {
   pub namespace: String,
 }
 
-/// Apply the Kubernetes manifest file and collect the pod event time durations
+/// Apply the Kubernetes manifest file containing the pod definition and collect the pod event time durations
 #[derive(Args, Debug, Serialize, Deserialize)]
-pub struct RunInput {
-  /// The Kubernetes context to use
+pub struct ApplyInput {
+  /// The path to the Kubernetes manifest file to apply
   #[clap(short, long)]
-  pub path: PathBuf,
+  pub file: PathBuf,
 }
 
 type Conditions = HashMap<String, chrono::DateTime<chrono::Utc>>;
@@ -104,18 +101,45 @@ async fn get_pod_status_timings(conditions: Conditions) -> Result<()> {
   Ok(())
 }
 
-pub async fn collect(input: &CollectInput, client: kube::Client) -> Result<()> {
-  let pods: Api<Pod> = Api::namespaced(client, &input.namespace);
-  let pod = match pods.get(&input.name).await {
-    Ok(p) => p,
-    Err(_) => bail!("Pod `{}` not found in namespace `{}`", input.name, input.namespace),
-  };
-
+/// Watch for pod to be in the `Running` phase
+async fn is_pod_running(name: &str, pod_api: Api<Pod>) -> Result<bool> {
+  let pod = pod_api.get(name).await?;
   let status = pod.status.unwrap();
 
-  while *status.phase.as_ref().unwrap() != "Running" {
-    tokio::time::sleep(Duration::from_secs(15)).await;
+  // Exit early if the pod is already in the `Running` phase
+  if status.phase.unwrap() == "Running" {
+    return Ok(true);
   }
+
+  let wp = WatchParams::default()
+    .timeout(30)
+    .fields(&format!("metadata.name={}", name));
+
+  let mut stream = pod_api.watch(&wp, "0").await?.boxed();
+  while let Some(status) = stream.try_next().await? {
+    match status {
+      WatchEvent::Modified(s) => {
+        let phase = s.status.as_ref().unwrap().phase.as_ref().unwrap();
+        info!("Pod `{}` => {phase}", s.name_any());
+
+        if phase == "Running" {
+          return Ok(true);
+        }
+      }
+      WatchEvent::Error(s) => println!("{}", s),
+      _ => (),
+    }
+  }
+
+  let pod = pod_api.get(name).await?;
+  let status = pod.status.unwrap();
+
+  Ok(status.phase.unwrap() == "Running")
+}
+
+/// Get the pod conditions from the pod status
+fn get_conditions(pod: Pod) -> Conditions {
+  let status = pod.status.unwrap();
 
   let mut conditions: HashMap<String, chrono::DateTime<chrono::Utc>> = HashMap::new();
   for cond in status.conditions.unwrap() {
@@ -124,42 +148,61 @@ pub async fn collect(input: &CollectInput, client: kube::Client) -> Result<()> {
     conditions.insert(cond.type_, ltt);
   }
 
-  get_pod_status_timings(conditions).await?;
-
-  Ok(())
+  conditions
 }
 
-pub async fn run(input: &RunInput, client: kube::Client) -> Result<()> {
-  let discovery = Discovery::new(client.clone()).run().await?;
-  let ssapply = PatchParams::apply("ktime").force();
-  let yaml =
-    std::fs::read_to_string(&input.path).with_context(|| format!("Failed to read {}", input.path.display()))?;
+/// Collect the pod event time durations of an existing Kubernetes pod
+pub async fn collect(input: &CollectInput, client: kube::Client) -> Result<()> {
+  let pod_api: Api<Pod> = Api::namespaced(client.clone(), &input.namespace);
 
-  let de = serde_yaml::Deserializer::from_str(&yaml);
-  let doc = serde_yaml::Value::deserialize(de)?;
-
-  let obj: DynamicObject = serde_yaml::from_value(doc)?;
-  let namespace = obj.metadata.namespace.as_deref().or(Some("default"));
-  let gvk = if let Some(tm) = &obj.types {
-    GroupVersionKind::try_from(tm)?
-  } else {
-    bail!("cannot apply object without valid TypeMeta {:?}", obj);
-  };
-
-  let name = obj.name_any();
-  if let Some((ar, _caps)) = discovery.resolve_gvk(&gvk) {
-    let api: Api<DynamicObject> = match namespace {
-      Some(namespace) => Api::namespaced_with(client, namespace, &ar),
-      None => Api::default_namespaced_with(client, &ar),
-    };
-
-    info!("Applying {}: \n{}", gvk.kind, serde_yaml::to_string(&obj)?);
-    let data: serde_json::Value = serde_json::to_value(&obj)?;
-    let _r = api.patch(&name, &ssapply, &Patch::Apply(data)).await?;
-    info!("Applied {} `{}`", gvk.kind, name);
-  } else {
-    warn!("Cannot apply document for unknown {:?}", gvk);
+  loop {
+    if is_pod_running(&input.name, pod_api.clone()).await? {
+      break;
+    }
+    info!("Waiting for pod `{}` to be in the `Running` phase...", &input.name);
   }
 
-  Ok(())
+  let pod = pod_api.get(&input.name).await?;
+  let conditions = get_conditions(pod);
+
+  get_pod_status_timings(conditions).await
+}
+
+/// Apply the Kubernetes manifest file and collect the pod event time durations
+pub async fn apply(input: &ApplyInput, client: kube::Client) -> Result<()> {
+  let manifest =
+    std::fs::read_to_string(&input.file).with_context(|| format!("Failed to read `{}`", input.file.display()))?;
+
+  let de = serde_yaml::Deserializer::from_str(&manifest);
+  let pod_doc = serde_yaml::Value::deserialize(de)?;
+  let pod: Pod = match serde_yaml::from_value(pod_doc) {
+    Ok(p) => p,
+    Err(e) => bail!("Failed to deserialize pod object: {e}\n Only pod manifests are supported at this time."),
+  };
+
+  let mut namespace = "default";
+
+  // Only pods are supported
+  let pod_api: Api<Pod> = match pod.metadata.namespace.as_deref() {
+    Some(ns) => {
+      namespace = ns;
+      Api::namespaced(client.clone(), ns)
+    }
+    None => Api::default_namespaced(client.clone()),
+  };
+
+  let name = pod.name_any();
+
+  let pp = PostParams::default();
+  let _pod = pod_api.create(&pp, &pod).await?;
+  info!("Pod `{name}` applied");
+
+  collect(
+    &CollectInput {
+      name,
+      namespace: namespace.to_string(),
+    },
+    client,
+  )
+  .await
 }
