@@ -20,6 +20,8 @@ clap-verbosity-flag = "2.0"
 k8s-openapi = { version = "0.22", default-features = false, features = ["latest"] }
 kube = { version = "0.93", default-features = false, features = [ "client", "derive", "rustls-tls" ] }
 serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
 tokio = { version = "1.39", default-features = false, features = ["macros", "rt-multi-thread"] }
 tracing = { version = "0.1", default-features = false, features = ["log-always"] }
 tracing-log = "0.2"

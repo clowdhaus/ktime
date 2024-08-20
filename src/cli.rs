@@ -1,13 +1,18 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anstyle::{AnsiColor, Color, Style};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{builder::Styles, Args, Parser, Subcommand};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use k8s_openapi::api::core::v1::Pod;
-use kube::api::Api;
+use kube::{
+  api::{Api, DynamicObject, Patch, PatchParams, ResourceExt},
+  core::GroupVersionKind,
+  discovery::Discovery,
+};
 use serde::{Deserialize, Serialize};
 use tokio::time::Duration;
+use tracing::{info, warn};
 
 /// Styles for CLI
 fn get_styles() -> Styles {
@@ -44,14 +49,14 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
   #[command(arg_required_else_help = true)]
-  Collect(Input),
+  Collect(CollectInput),
   #[command(arg_required_else_help = true)]
-  Run(Input),
+  Run(RunInput),
 }
 
-/// Analyze an Amazon EKS cluster for potential upgrade issues
+/// Collect the pod event time durations of an existing Kubernetes pod
 #[derive(Args, Debug, Serialize, Deserialize)]
-pub struct Input {
+pub struct CollectInput {
   /// The name of the Kubernetes pod
   #[clap(short, long)]
   pub name: String,
@@ -59,10 +64,14 @@ pub struct Input {
   /// The namespace of the Kubernetes pod
   #[clap(alias = "ns", long, default_value = "default")]
   pub namespace: String,
+}
 
+/// Apply the Kubernetes manifest file and collect the pod event time durations
+#[derive(Args, Debug, Serialize, Deserialize)]
+pub struct RunInput {
   /// The Kubernetes context to use
   #[clap(short, long)]
-  pub path: Option<PathBuf>,
+  pub path: PathBuf,
 }
 
 type Conditions = HashMap<String, chrono::DateTime<chrono::Utc>>;
@@ -95,7 +104,7 @@ async fn get_pod_status_timings(conditions: Conditions) -> Result<()> {
   Ok(())
 }
 
-pub async fn collect(input: &Input, client: kube::Client) -> Result<()> {
+pub async fn collect(input: &CollectInput, client: kube::Client) -> Result<()> {
   let pods: Api<Pod> = Api::namespaced(client, &input.namespace);
   let pod = match pods.get(&input.name).await {
     Ok(p) => p,
@@ -107,8 +116,6 @@ pub async fn collect(input: &Input, client: kube::Client) -> Result<()> {
   while *status.phase.as_ref().unwrap() != "Running" {
     tokio::time::sleep(Duration::from_secs(15)).await;
   }
-
-  println!("{:#?}", status.conditions);
 
   let mut conditions: HashMap<String, chrono::DateTime<chrono::Utc>> = HashMap::new();
   for cond in status.conditions.unwrap() {
@@ -122,16 +129,37 @@ pub async fn collect(input: &Input, client: kube::Client) -> Result<()> {
   Ok(())
 }
 
-pub async fn run(input: &Input, _client: kube::Client) -> Result<()> {
-  let path = match &input.path {
-    Some(p) => p.display().to_string(),
-    None => bail!("The path to the manifest file is required"),
+pub async fn run(input: &RunInput, client: kube::Client) -> Result<()> {
+  let discovery = Discovery::new(client.clone()).run().await?;
+  let ssapply = PatchParams::apply("ktime").force();
+  let yaml =
+    std::fs::read_to_string(&input.path).with_context(|| format!("Failed to read {}", input.path.display()))?;
+
+  let de = serde_yaml::Deserializer::from_str(&yaml);
+  let doc = serde_yaml::Value::deserialize(de)?;
+
+  let obj: DynamicObject = serde_yaml::from_value(doc)?;
+  let namespace = obj.metadata.namespace.as_deref().or(Some("default"));
+  let gvk = if let Some(tm) = &obj.types {
+    GroupVersionKind::try_from(tm)?
+  } else {
+    bail!("cannot apply object without valid TypeMeta {:?}", obj);
   };
 
-  println!(
-    "Applying the manifest at `{path}` and collecting Kubernetes pod event time durations for the pod `{}` in the namespace `{}`",
-    input.name, input.namespace
-  );
+  let name = obj.name_any();
+  if let Some((ar, _caps)) = discovery.resolve_gvk(&gvk) {
+    let api: Api<DynamicObject> = match namespace {
+      Some(namespace) => Api::namespaced_with(client, namespace, &ar),
+      None => Api::default_namespaced_with(client, &ar),
+    };
+
+    info!("Applying {}: \n{}", gvk.kind, serde_yaml::to_string(&obj)?);
+    let data: serde_json::Value = serde_json::to_value(&obj)?;
+    let _r = api.patch(&name, &ssapply, &Patch::Apply(data)).await?;
+    info!("Applied {} `{}`", gvk.kind, name);
+  } else {
+    warn!("Cannot apply document for unknown {:?}", gvk);
+  }
 
   Ok(())
 }
