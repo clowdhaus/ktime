@@ -54,7 +54,7 @@ jobs:
       RUST_BACKTRACE: 1
     strategy:
       matrix:
-        build: [linux, linux-arm, macos, macos-arm, win-msvc]
+        build: [linux, linux-arm, macos, macos-arm, win-msvc, win32-msvc]
         include:
         - build: linux
           os: ubuntu-22.04
@@ -76,6 +76,10 @@ jobs:
           os: windows-2022
           rust: nightly
           target: x86_64-pc-windows-msvc
+        - build: win32-msvc
+          os: windows-2022
+          rust: nightly
+          target: i686-pc-windows-msvc
 
     steps:
     - name: Checkout repository
@@ -107,7 +111,7 @@ jobs:
     - name: Build archive
       shell: bash
       run: |
-        STAGING="ktime-${{ needs.changelog.outputs.ktime }}-${{ matrix.target }}"
+        STAGING="ktime-${{ needs.changelog.outputs.ktime_version }}-${{ matrix.target }}"
         mkdir -p "${STAGING}"
 
         cp {README.md,LICENSE} "${STAGING}/"
