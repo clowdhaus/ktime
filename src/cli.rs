@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anstyle::{AnsiColor, Color, Style};
-use anyhow::{bail, Context, Result};
-use clap::{builder::Styles, Args, Parser, Subcommand};
+use anyhow::{Context, Result, bail};
+use clap::{Args, Parser, Subcommand, builder::Styles};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use futures::prelude::*;
 use k8s_openapi::api::core::v1::Pod;
@@ -113,7 +113,7 @@ async fn is_pod_running(name: &str, pod_api: Api<Pod>) -> Result<bool> {
 
   let wp = WatchParams::default()
     .timeout(30)
-    .fields(&format!("metadata.name={}", name));
+    .fields(&format!("metadata.name={name}"));
 
   let mut stream = pod_api.watch(&wp, "0").await?.boxed();
   while let Some(status) = stream.try_next().await? {
@@ -126,7 +126,7 @@ async fn is_pod_running(name: &str, pod_api: Api<Pod>) -> Result<bool> {
           return Ok(true);
         }
       }
-      WatchEvent::Error(s) => println!("{}", s),
+      WatchEvent::Error(s) => println!("{s}"),
       _ => (),
     }
   }

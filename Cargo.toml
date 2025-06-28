@@ -6,7 +6,7 @@ documentation = "https://github.com/clowdhaus/ktime"
 homepage = "https://github.com/clowdhaus/ktime"
 repository = "https://github.com/clowdhaus/ktime"
 license = "Apache-2.0"
-edition = "2021"
+edition = "2024"
 categories = [
   "command-line-utilities",
   "kubernetes",
