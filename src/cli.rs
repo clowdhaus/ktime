@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, builder::Styles};
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use futures::prelude::*;
-use k8s_openapi::api::core::v1::Pod;
+use k8s_openapi::{api::core::v1::Pod, jiff::Timestamp};
 use kube::api::{Api, PostParams, ResourceExt, WatchEvent, WatchParams};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -71,31 +71,31 @@ pub struct ApplyInput {
   pub file: PathBuf,
 }
 
-type Conditions = HashMap<String, chrono::DateTime<chrono::Utc>>;
+type Conditions = HashMap<String, Timestamp>;
 
 async fn get_pod_status_timings(conditions: Conditions) -> Result<()> {
   let pod_scheduled = conditions.get("PodScheduled").unwrap();
 
   if let Some(initialized) = conditions.get("Initialized") {
-    println!("Initialize: {:?}s", (*initialized - *pod_scheduled).num_seconds());
+    println!("Initialize: {:?}s", initialized.as_second() - pod_scheduled.as_second());
   }
 
   if let Some(pod_ready_to_start_containers) = conditions.get("PodReadyToStartContainers") {
     println!(
       "Pod ready to start containers: {:?}s",
-      (*pod_ready_to_start_containers - *pod_scheduled).num_seconds()
+      pod_ready_to_start_containers.as_second() - pod_scheduled.as_second()
     );
   }
 
   if let Some(containers_ready) = conditions.get("ContainersReady") {
     println!(
       "Containers ready: {:?}s",
-      (*containers_ready - *pod_scheduled).num_seconds()
+      containers_ready.as_second() - pod_scheduled.as_second()
     );
   }
 
   if let Some(ready) = conditions.get("Ready") {
-    println!("Ready: {:?}s", (*ready - *pod_scheduled).num_seconds());
+    println!("Ready: {:?}s", ready.as_second() - pod_scheduled.as_second());
   }
 
   Ok(())
@@ -141,7 +141,7 @@ async fn is_pod_running(name: &str, pod_api: Api<Pod>) -> Result<bool> {
 fn get_conditions(pod: Pod) -> Conditions {
   let status = pod.status.unwrap();
 
-  let mut conditions: HashMap<String, chrono::DateTime<chrono::Utc>> = HashMap::new();
+  let mut conditions: Conditions = HashMap::new();
   for cond in status.conditions.unwrap() {
     let ltt = cond.last_transition_time.unwrap().0;
 
